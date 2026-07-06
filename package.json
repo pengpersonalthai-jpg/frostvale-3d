@@ -1,0 +1,18 @@
+{
+  "name": "frostvale-3d",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Frostvale — an original snowbound alpine valley you can explore on foot or on horseback, right in the browser.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.178.0"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}
