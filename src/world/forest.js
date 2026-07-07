@@ -17,6 +17,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeNoise2D, fbm } from './noise.js';
 import {
   terrainHeight, groundNormal, riverCenterX, CAMP, TOWER, BRIDGE, LAKE,
+  TUNNEL, BRIDGES,
 } from './terrain.js';
 
 const TREE_COUNT = 2400;
@@ -159,6 +160,12 @@ export function createForest() {
     if (Math.hypot(x - BRIDGE.x, z - BRIDGE.z) < 16) continue;
     if (Math.abs(x - riverCenterX(z)) < 18) continue;
     if (Math.hypot(x - LAKE.x, z - LAKE.z) < 68) continue;
+    if (Math.hypot(x - TUNNEL.x, z - TUNNEL.z) < 16) continue;
+    let onBridge = false;
+    for (const b of BRIDGES) {
+      if (Math.abs(z - b.z) < 8 && Math.abs(x - b.xc) < b.halfLen + 5) onBridge = true;
+    }
+    if (onBridge) continue;
 
     const s = 0.7 + (rng(attempt * 1.19, 4.7) * 0.5 + 0.5) * 0.75;
     dummy.position.set(x, h - 0.15, z); // sink slightly into snow

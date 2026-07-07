@@ -2,6 +2,10 @@
  * Mount system: horse placement, the E-to-mount interaction, and the
  * riding controller.
  *
+ * Discovery aids: a soft amber marker floats over the nearest horse from
+ * ~14 units away, and the "Press E to mount" prompt appears within
+ * MOUNT_RANGE. Interaction uses the layout-independent "interact" action.
+ *
  * Riding deliberately does NOT feel like strafe-movement:
  *  - W builds speed with acceleration; releasing it coasts down.
  *  - A/D steer the horse's heading; the turn rate tightens at low speed
@@ -13,9 +17,10 @@
 
 import * as THREE from 'three';
 import { createHorse } from './horse.js';
-import { groundHeight, terrainHeight, CAMP } from '../world/terrain.js';
+import { groundHeightUnder, terrainHeight, CAMP } from '../world/terrain.js';
 
-const MOUNT_RANGE = 3.4;
+const MOUNT_RANGE = 4.5;
+const MARKER_RANGE = 14;
 const WALK_MAX = 7.0;
 const GALLOP_MAX = 16.5;
 const REVERSE_MAX = 2.2;
@@ -51,15 +56,23 @@ export class MountSystem {
       scene.add(horse.root);
       return horse;
     });
+
+    // Floating "you can ride me" marker — bright enough to catch the bloom
+    this.marker = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.18, 0),
+      new THREE.MeshBasicMaterial({ color: 0xffc069 }),
+    );
+    this.marker.visible = false;
+    scene.add(this.marker);
   }
 
   get isRiding() {
     return this.riding !== null;
   }
 
-  nearestHorse() {
+  nearestHorse(maxDist = MOUNT_RANGE) {
     let best = null;
-    let bestD = MOUNT_RANGE;
+    let bestD = maxDist;
     for (const h of this.horses) {
       const d = h.pos.distanceTo(this.player.pos);
       if (d < bestD) {
@@ -78,6 +91,7 @@ export class MountSystem {
     this.cam.mode = 'mounted';
     this.ui.setMode('mounted');
     this.ui.hidePrompt();
+    this.marker.visible = false;
   }
 
   dismount() {
@@ -91,9 +105,9 @@ export class MountSystem {
     );
     const p = this.player.pos;
     p.copy(horse.pos).add(side);
-    p.y = groundHeight(p.x, p.z);
+    p.y = groundHeightUnder(p.x, p.z, horse.pos.y + 1);
     this.player.resolveCollisions(p);
-    p.y = groundHeight(p.x, p.z);
+    p.y = groundHeightUnder(p.x, p.z, p.y + 1);
     this.player.vel.set(0, 0, 0);
     this.player.vy = 0;
     this.player.active = true;
@@ -105,12 +119,23 @@ export class MountSystem {
     const input = this.input;
 
     if (!this.riding) {
-      // Idle-animate every horse; offer the mount prompt when close
+      // Idle-animate every horse; offer the marker + mount prompt when close
       for (const h of this.horses) h.animator.update(dt, t, 0, false);
-      const near = this.nearestHorse();
+
+      const nearby = this.nearestHorse(MARKER_RANGE);
+      if (nearby) {
+        this.marker.visible = true;
+        this.marker.position.copy(nearby.pos);
+        this.marker.position.y += 2.75 + Math.sin(t * 2.2) * 0.12;
+        this.marker.rotation.y = t * 1.8;
+      } else {
+        this.marker.visible = false;
+      }
+
+      const near = this.nearestHorse(MOUNT_RANGE);
       if (near) {
         this.ui.showPrompt(`Mount ${near.name}`);
-        if (input.wasPressed('KeyE')) this.mount(near);
+        if (input.actionPressed('interact')) this.mount(near);
       } else {
         this.ui.hidePrompt();
       }
@@ -120,17 +145,17 @@ export class MountSystem {
     // ---- Riding ----
     const horse = this.riding;
 
-    if (input.wasPressed('KeyE')) {
+    if (input.actionPressed('interact')) {
       this.dismount();
       for (const h of this.horses) h.animator.update(dt, t, 0, false);
       return { fovBoost: 0 };
     }
 
     // Throttle: W forward (Shift gallops), S brake/reverse
-    const galloping = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
+    const galloping = input.action('sprint');
     let target = 0;
-    if (input.isDown('KeyW')) target = galloping ? GALLOP_MAX : WALK_MAX;
-    else if (input.isDown('KeyS')) target = this.speed > 0.5 ? 0 : -REVERSE_MAX;
+    if (input.action('forward')) target = galloping ? GALLOP_MAX : WALK_MAX;
+    else if (input.action('back')) target = this.speed > 0.5 ? 0 : -REVERSE_MAX;
 
     const rate = Math.abs(target) < Math.abs(this.speed) ? BRAKE : ACCEL;
     const delta = target - this.speed;
@@ -138,8 +163,8 @@ export class MountSystem {
 
     // Steering: tighter when slow, wide arcs at full gallop; reversing flips it
     let steer = 0;
-    if (input.isDown('KeyA')) steer += 1;
-    if (input.isDown('KeyD')) steer -= 1;
+    if (input.action('left')) steer += 1;
+    if (input.action('right')) steer -= 1;
     const speedFrac = Math.min(Math.abs(this.speed) / GALLOP_MAX, 1);
     const turnRate = Math.abs(this.speed) < 0.3
       ? 1.1 // shuffle in place
@@ -151,8 +176,8 @@ export class MountSystem {
     const step = fwd.clone().multiplyScalar(this.speed * dt);
     const stepLen = step.length();
     if (stepLen > 1e-6) {
-      const here = groundHeight(horse.pos.x, horse.pos.z);
-      const there = groundHeight(horse.pos.x + step.x, horse.pos.z + step.z);
+      const here = groundHeightUnder(horse.pos.x, horse.pos.z, horse.pos.y);
+      const there = groundHeightUnder(horse.pos.x + step.x, horse.pos.z + step.z, horse.pos.y + 0.8);
       if ((there - here) / stepLen > MAX_CLIMB_SLOPE) {
         step.set(0, 0, 0);
         this.speed *= 0.4; // balk at the slope
@@ -164,12 +189,12 @@ export class MountSystem {
     // Reuse the player's collision solver with a horse-sized radius
     this.player.resolveCollisions(horse.pos, 0.9);
 
-    // Terrain following: smooth vertical tracking + pitch along the slope
-    const groundY = groundHeight(horse.pos.x, horse.pos.z);
+    // Terrain/bridge following: smooth vertical tracking + slope pitch
+    const groundY = groundHeightUnder(horse.pos.x, horse.pos.z, horse.pos.y + 0.5);
     horse.pos.y += (groundY - horse.pos.y) * Math.min(1, dt * 10);
 
-    const ahead = groundHeight(horse.pos.x + fwd.x * 1.2, horse.pos.z + fwd.z * 1.2);
-    const behind = groundHeight(horse.pos.x - fwd.x * 1.2, horse.pos.z - fwd.z * 1.2);
+    const ahead = groundHeightUnder(horse.pos.x + fwd.x * 1.2, horse.pos.z + fwd.z * 1.2, horse.pos.y + 0.8);
+    const behind = groundHeightUnder(horse.pos.x - fwd.x * 1.2, horse.pos.z - fwd.z * 1.2, horse.pos.y + 0.8);
     const slopePitch = Math.atan2(ahead - behind, 2.4) * 0.55;
 
     horse.root.position.copy(horse.pos);

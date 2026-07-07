@@ -34,6 +34,14 @@ export const CAMP = { x: 70, z: 30, name: 'Last Ember Camp' };
 export const TOWER = { x: 170, z: -210, name: "Aldwyn's Watch" };
 export const BRIDGE = { x: 0, z: 150, name: 'The Sundered Span' }; // x set below
 
+// The Hollow Gate: a ruined arched gallery on the way up to the tower.
+// Terrain is flattened along its axis so the passage floor is level.
+export const TUNNEL = {
+  x: 115, z: -78,
+  yaw: Math.atan2(TOWER.x - CAMP.x, TOWER.z - CAMP.z), // aligned camp → tower
+  length: 18, radius: 3.1, floorY: 6.4,
+};
+
 const baseNoise = makeNoise2D(20260706);
 const detailNoise = makeNoise2D(911);
 
@@ -82,6 +90,18 @@ export function terrainHeight(x, z) {
   const dCamp = Math.hypot(x - CAMP.x, z - CAMP.z);
   h = lerp(h, 5.6, Math.exp(-((dCamp / 14) ** 2)));
 
+  // Level strip along the Hollow Gate so the gallery floor sits flush
+  {
+    const dx = x - TUNNEL.x;
+    const dz = z - TUNNEL.z;
+    const sa = Math.sin(TUNNEL.yaw);
+    const ca = Math.cos(TUNNEL.yaw);
+    const along = dx * sa + dz * ca;
+    const across = dx * ca - dz * sa;
+    const inside = Math.exp(-((across / 5) ** 2) - ((along / 15) ** 2));
+    h = lerp(h, TUNNEL.floorY, inside);
+  }
+
   // Fine surface detail, suppressed on the smooth river ice banks
   h += detailNoise(x * 0.09, z * 0.09) * 0.5 * (1 - 0.8 * wet);
 
@@ -91,6 +111,54 @@ export function terrainHeight(x, z) {
 /** Walkable ground height: terrain, or the ice sheet where terrain dips under it. */
 export function groundHeight(x, z) {
   return Math.max(terrainHeight(x, z), ICE_LEVEL);
+}
+
+// ---- Crossable bridges -------------------------------------------------------
+// Two intact stone bridges span the frozen river (the Sundered Span stays
+// broken — it's a landmark). Their decks participate in ground queries via
+// groundHeightUnder(), so characters can both WALK OVER them and PASS UNDER
+// them on the ice: a deck only counts as ground for someone already at
+// (roughly) deck height.
+
+function makeBridge(z, halfLen, width, arch, name) {
+  const xc = riverCenterX(z);
+  // Anchor heights are clamped above the ice so the span can never sag
+  // into the river, even where the banks themselves are low.
+  const yWest = Math.max(terrainHeight(xc - halfLen, z), ICE_LEVEL + 0.9);
+  const yEast = Math.max(terrainHeight(xc + halfLen, z), ICE_LEVEL + 0.9);
+  return {
+    z, xc, halfLen, width, arch, name, yWest, yEast,
+    /** Deck height at (x, z), or null when outside the bridge footprint. */
+    deckAt(x, zz) {
+      if (Math.abs(zz - this.z) > this.width / 2) return null;
+      const u = (x - this.xc) / this.halfLen;
+      if (Math.abs(u) > 1) return null;
+      const base = lerp(this.yWest, this.yEast, (u + 1) / 2) + this.arch * (1 - u * u);
+      // Blend flush into the real ground near the ends so walking on/off
+      // is a smooth ramp, never a blocked step.
+      const blend = Math.min(1, (1 - Math.abs(u)) / 0.18);
+      const ground = Math.max(terrainHeight(x, zz), ICE_LEVEL);
+      return ground + (base - ground) * blend;
+    },
+  };
+}
+
+export const BRIDGES = [
+  makeBridge(75, 23, 4.6, 1.3, "Wanderer's Crossing"),   // near the camp
+  makeBridge(-58, 22, 4.4, 1.1, 'Northlight Bridge'),    // toward the lake
+];
+
+/**
+ * Ground height including bridge decks, given the asker's current height.
+ * Standing under a bridge (y well below the deck) still returns the ice.
+ */
+export function groundHeightUnder(x, z, y) {
+  let g = groundHeight(x, z);
+  for (const b of BRIDGES) {
+    const deck = b.deckAt(x, z);
+    if (deck !== null && deck > g && y >= deck - 0.6) g = deck;
+  }
+  return g;
 }
 
 /** True if (x, z) stands on frozen water rather than snow. */

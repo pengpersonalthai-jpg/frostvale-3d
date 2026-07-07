@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import { createCharacter, applySeatedPose } from '../controls/character.js';
 
 export const HORSE_PALETTES = {
   boreal: { coat: 0x9aa3b2, mane: 0x565d6b, name: 'Boreal' },   // frost grey
@@ -20,12 +21,13 @@ export const HORSE_PALETTES = {
   vesper: { coat: 0x2b2624, mane: 0x131110, name: 'Vesper' },   // black
 };
 
-function limb(mat, pivotPos, upperLen, lowerLen) {
+/** Jointed quadruped leg — also reused by the deer in world/animals.js. */
+export function limb(mat, pivotPos, upperLen, lowerLen, thickness = 1) {
   const pivot = new THREE.Group();
   pivot.position.copy(pivotPos);
 
   const upper = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.09, 0.07, upperLen, 6), mat,
+    new THREE.CylinderGeometry(0.09 * thickness, 0.07 * thickness, upperLen, 6), mat,
   );
   upper.position.y = -upperLen / 2;
   upper.castShadow = true;
@@ -36,14 +38,14 @@ function limb(mat, pivotPos, upperLen, lowerLen) {
   pivot.add(knee);
 
   const lower = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.06, 0.05, lowerLen, 6), mat,
+    new THREE.CylinderGeometry(0.06 * thickness, 0.05 * thickness, lowerLen, 6), mat,
   );
   lower.position.y = -lowerLen / 2;
   lower.castShadow = true;
   knee.add(lower);
 
   const hoof = new THREE.Mesh(
-    new THREE.BoxGeometry(0.13, 0.1, 0.16),
+    new THREE.BoxGeometry(0.13 * thickness, 0.1, 0.16 * thickness),
     new THREE.MeshStandardMaterial({ color: 0x171412, roughness: 0.7 }),
   );
   hoof.position.y = -lowerLen - 0.04;
@@ -153,38 +155,18 @@ export function createHorse(paletteKey = 'boreal') {
   body.add(pommel);
 
   // ---- Rider (visible only while mounted) ----
-  // The on-foot wanderer mesh is hidden during riding; this seated figure
-  // takes its place so the horse never gallops around eerily riderless.
-  const rider = new THREE.Group();
-  rider.position.set(0, 1.72, -0.02);
-  const riderCloak = new THREE.MeshStandardMaterial({ color: 0x2c3352, roughness: 0.9 });
-  const riderSkin = new THREE.MeshStandardMaterial({ color: 0xd8c6b2, roughness: 0.8 });
-
-  const riderTorso = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.85, 8), riderCloak);
-  riderTorso.position.y = 0.42;
-  riderTorso.castShadow = true;
-  rider.add(riderTorso);
-
-  const riderHead = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), riderSkin);
-  riderHead.position.y = 0.98;
-  rider.add(riderHead);
-
-  const riderHood = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.34, 8, 1, true), riderCloak);
-  riderHood.position.set(0, 1.06, -0.05);
-  riderHood.rotation.x = -0.35;
-  rider.add(riderHood);
-
-  // Legs draped down the flanks
-  for (const side of [-1, 1]) {
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.06, 0.55, 6), riderCloak);
-    leg.position.set(side * 0.34, 0.05, 0.08);
-    leg.rotation.z = side * 0.35;
-    rider.add(leg);
-  }
+  // The on-foot character mesh is hidden during riding; this instance of the
+  // same articulated character sits in the saddle (posed each frame by
+  // applySeatedPose) so the horse never gallops around eerily riderless.
+  const riderChar = createCharacter();
+  const rider = riderChar.group;
+  // Root is at the feet; raise it so the seated hips land on the saddle
+  rider.position.set(0, 0.82, -0.02);
+  rider.scale.setScalar(0.97);
   rider.visible = false;
   body.add(rider);
 
-  const parts = { body, barrel, neckPivot, headPivot, legs, tailPivot, rider };
+  const parts = { body, barrel, neckPivot, headPivot, legs, tailPivot, rider, riderRig: riderChar.rig };
   const animator = new HorseAnimator(parts);
 
   // Where a rider sits, in the horse's local space
@@ -272,9 +254,9 @@ export class HorseAnimator {
     tailPivot.rotation.x = 0.35 + stream;
     tailPivot.rotation.z = Math.sin(t * 1.9 + this._idleSeed) * (0.18 - 0.1 * moveAmp);
 
-    // ---- Rider ---- leans into the gallop, rocks gently with the stride
+    // ---- Rider ---- posed astride, leaning into the gallop
     if (this.parts.rider && this.parts.rider.visible) {
-      this.parts.rider.rotation.x = gallop * 0.3 + Math.sin(p) * 0.05 * moveAmp;
+      applySeatedPose(this.parts.riderRig, { gallop, phase: p, move: moveAmp });
     }
   }
 }

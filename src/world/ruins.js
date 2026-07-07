@@ -10,7 +10,9 @@
  */
 
 import * as THREE from 'three';
-import { terrainHeight, groundHeight, TOWER, BRIDGE, CAMP, riverCenterX } from './terrain.js';
+import {
+  terrainHeight, groundHeight, TOWER, BRIDGE, CAMP, TUNNEL, BRIDGES,
+} from './terrain.js';
 
 // Shared weathered-stone material (flat shading reads as rough-cut masonry)
 const stoneMat = new THREE.MeshStandardMaterial({
@@ -154,6 +156,131 @@ function buildBridge(colliders) {
   return g;
 }
 
+// ---- Intact crossable bridges -------------------------------------------------
+// Meshes for the bridges defined in terrain.js (whose deckAt() already makes
+// them walkable). Built as short deck segments following the arch, with low
+// parapets and piers down to the ice.
+
+function buildCrossableBridge(b, colliders) {
+  const g = new THREE.Group();
+  const SEGS = 12;
+  const segLen = (b.halfLen * 2) / SEGS;
+
+  for (let i = 0; i < SEGS; i++) {
+    const u0 = -1 + (i + 0.5) * (2 / SEGS);
+    const x = b.xc + u0 * b.halfLen;
+    const y = b.deckAt(x, b.z);
+    // Deck slab, tilted to follow the arch slope
+    const slope = Math.atan2(
+      b.deckAt(Math.min(b.xc + b.halfLen, x + 1), b.z) - b.deckAt(Math.max(b.xc - b.halfLen, x - 1), b.z),
+      2,
+    );
+    const slab = shadow(new THREE.Mesh(
+      new THREE.BoxGeometry(segLen + 0.12, 0.55, b.width), stoneMat,
+    ));
+    slab.position.set(x, y - 0.28, b.z);
+    slab.rotation.z = -slope;
+    g.add(slab);
+
+    // Low parapets on both sides
+    for (const side of [-1, 1]) {
+      const parapet = shadow(new THREE.Mesh(
+        new THREE.BoxGeometry(segLen + 0.1, 0.5, 0.3), darkStoneMat,
+      ));
+      parapet.position.set(x, y + 0.22, b.z + side * (b.width / 2 - 0.18));
+      parapet.rotation.z = -slope;
+      g.add(parapet);
+    }
+  }
+
+  // Piers dropping to the frozen river
+  for (const u of [-0.45, 0.45]) {
+    const px = b.xc + u * b.halfLen;
+    const top = b.deckAt(px, b.z) - 0.4;
+    const pier = shadow(new THREE.Mesh(new THREE.BoxGeometry(2.4, top, 3.2), darkStoneMat));
+    pier.position.set(px, top / 2, b.z);
+    g.add(pier);
+  }
+
+  // End pillars (with colliders so you're funnelled onto the deck)
+  for (const ue of [-1, 1]) {
+    const ex = b.xc + ue * b.halfLen;
+    const ey = b.deckAt(ex, b.z);
+    for (const side of [-1, 1]) {
+      const pillar = shadow(new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.6, 0.8), stoneMat));
+      pillar.position.set(ex, ey + 0.6, b.z + side * (b.width / 2 + 0.25));
+      g.add(pillar);
+      colliders.push({ x: ex, z: b.z + side * (b.width / 2 + 0.25), r: 0.6 });
+    }
+  }
+
+  return g;
+}
+
+// ---- The Hollow Gate ------------------------------------------------------------
+// A ruined arched gallery on the trail between the camp and the tower — a
+// short "tunnel" you (and your horse) can ride through. Terrain under it is
+// flattened by terrain.js; walls get collider rows so you pass through the
+// bore, not the masonry.
+
+function buildHollowGate(colliders) {
+  const g = new THREE.Group();
+  const { x, z, yaw, length, radius, floorY } = TUNNEL;
+  g.position.set(x, floorY, z);
+  g.rotation.y = yaw;
+
+  // Vault: half-cylinder shell, axis along the local Z (travel direction)
+  const vaultGeo = new THREE.CylinderGeometry(radius, radius, length, 14, 1, true, 0, Math.PI);
+  vaultGeo.rotateZ(Math.PI / 2);  // axis Y → X, open side down
+  vaultGeo.rotateY(Math.PI / 2);  // axis X → Z
+  const vault = shadow(new THREE.Mesh(vaultGeo, stoneMat));
+  vault.material = stoneMat.clone();
+  vault.material.side = THREE.DoubleSide; // visible from inside the bore
+  vault.position.y = 1.1;                 // arch springs from the side walls
+  g.add(vault);
+
+  // Side walls the vault rests on
+  for (const side of [-1, 1]) {
+    const wall = shadow(new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.3, length), stoneMat));
+    wall.position.set(side * (radius - 0.15), 0.65, 0);
+    g.add(wall);
+  }
+
+  // Entrance arches (broken ring look) + rubble on the roofline
+  for (const end of [-1, 1]) {
+    const ring = shadow(new THREE.Mesh(
+      new THREE.TorusGeometry(radius, 0.4, 8, 14, Math.PI), darkStoneMat,
+    ));
+    ring.position.set(0, 1.1, end * (length / 2));
+    g.add(ring);
+  }
+  for (let i = 0; i < 6; i++) {
+    const s = 0.5 + ((i * 37) % 10) / 10 * 0.8;
+    const rock = shadow(new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), darkStoneMat));
+    rock.position.set(
+      ((i * 29) % 10) / 10 * 3 - 1.5,
+      radius + 0.9 + ((i * 13) % 4) * 0.15,
+      ((i * 53) % 10) / 10 * length - length / 2,
+    );
+    rock.rotation.set(i, i * 2.1, i * 0.7);
+    g.add(rock);
+  }
+
+  // Collider rows along both walls (world space)
+  const sa = Math.sin(yaw);
+  const ca = Math.cos(yaw);
+  for (let i = -3; i <= 3; i++) {
+    const along = (i / 3) * (length / 2);
+    for (const side of [-1, 1]) {
+      const wx = x + sa * along + ca * side * (radius - 0.15);
+      const wz = z + ca * along - sa * side * (radius - 0.15);
+      colliders.push({ x: wx, z: wz, r: 1.0 });
+    }
+  }
+
+  return g;
+}
+
 // ---- Last Ember Camp ---------------------------------------------------------
 
 function buildCamp(colliders) {
@@ -228,7 +355,11 @@ export function createRuins() {
   const tower = buildTower(colliders);
   group.add(tower.group);
 
-  group.add(buildBridge(colliders));
+  group.add(buildBridge(colliders)); // the Sundered Span (broken, scenic)
+
+  // The two intact, crossable bridges + the Hollow Gate gallery
+  for (const b of BRIDGES) group.add(buildCrossableBridge(b, colliders));
+  group.add(buildHollowGate(colliders));
 
   const camp = buildCamp(colliders);
   group.add(camp.group);

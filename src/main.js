@@ -8,9 +8,12 @@
 
 import * as THREE from 'three';
 
-import { createTerrain, groundHeight, CAMP, LAKE } from './world/terrain.js';
+import {
+  createTerrain, groundHeight, groundHeightUnder, BRIDGES, TUNNEL, CAMP,
+} from './world/terrain.js';
 import { createForest, forestUniforms } from './world/forest.js';
 import { createScatter } from './world/scatter.js';
+import { createAnimals } from './world/animals.js';
 import { createIce } from './world/ice.js';
 import { createSky, MOON_DIR } from './world/sky.js';
 import { createRuins } from './world/ruins.js';
@@ -120,6 +123,9 @@ const player = new Player(
 );
 const mounts = new MountSystem(scene, input, followCam, player, ui, prints);
 
+// Wildlife wanders whether or not the player is looking
+const animals = createAnimals(scene, forest.grid);
+
 ui.onEnterClick(() => input.requestLock());
 input.onLockChange((locked) => ui.setPlaying(locked));
 
@@ -158,6 +164,7 @@ function frame() {
   moon.position.copy(moon.target.position).addScaledVector(MOON_DIR, 160);
 
   // Ambient animation
+  animals.update(dt, t, player.pos);
   forestUniforms.uTime.value = t;
   sky.update(t);
   ice.update(t, camera.position);
@@ -172,11 +179,18 @@ function frame() {
   input.endFrame();
 }
 
-// Aim the spawn camera at the vale before the first click
+// Aim the spawn camera at the campfire + horses so the mount is the first
+// thing a new player sees (the lake and aurora are one mouse-turn away)
 player.pos.y = groundHeight(player.pos.x, player.pos.z);
-followCam.yaw = Math.atan2(player.pos.x - LAKE.x, player.pos.z - LAKE.z);
+const horseMid = new THREE.Vector3();
+for (const h of mounts.horses) horseMid.add(h.pos);
+horseMid.divideScalar(mounts.horses.length);
+followCam.yaw = Math.atan2(player.pos.x - horseMid.x, player.pos.z - horseMid.z);
 frame();
 
 // Debug/test hook (also handy in the browser console: try
 // __frostvale.mounts.horses[0].pos to find the horses).
-window.__frostvale = { player, mounts, followCam, camera, scene, renderer };
+window.__frostvale = {
+  player, mounts, followCam, camera, scene, renderer, animals,
+  world: { groundHeight, groundHeightUnder, BRIDGES, TUNNEL },
+};

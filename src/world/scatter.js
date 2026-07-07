@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import { makeNoise2D } from './noise.js';
-import { terrainHeight, groundNormal, LAKE, CAMP } from './terrain.js';
+import { terrainHeight, groundNormal, LAKE, CAMP, TUNNEL } from './terrain.js';
 
 const rng = makeNoise2D(31337);
 const rand = (i, salt) => rng(i * 0.937 + salt, salt * 1.71) * 0.5 + 0.5;
@@ -46,6 +46,8 @@ export function createScatter() {
     groundNormal(x, z, n);
     if (n.y < 0.45) continue;
     if (Math.hypot(x - CAMP.x, z - CAMP.z) < 14) continue;
+
+    if (Math.hypot(x - TUNNEL.x, z - TUNNEL.z) < 13) continue; // keep the bore clear
 
     const s = 0.5 + rand(i, 11) * 2.4;
     dummy.position.set(x, h - s * 0.25, z);
